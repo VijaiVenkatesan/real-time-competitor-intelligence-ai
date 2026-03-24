@@ -1,4 +1,4 @@
-# 🔍 AI Competitor Intelligence
+# 🔍 AI Real Time Competitor Intelligence
 
 > Autonomous market research powered by **9 real-time data sources** + AI synthesis — **100% free, zero API keys required**
 
