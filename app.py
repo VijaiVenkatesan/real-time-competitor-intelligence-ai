@@ -1,5 +1,5 @@
 """
-Advanced AI Competitor Intelligence — Real-Time Enhanced
+AI Real Time Competitor Intelligence — Real-Time Enhanced
 9 free data sources: Yahoo Finance, Google News RSS, Google Trends,
 GitHub, SEC Edgar, Product Hunt RSS, Wikipedia/Wikidata, Reddit, Job Boards
 """
@@ -50,7 +50,7 @@ def _ai_section(client, model: str, max_tokens: int,
 # ─────────────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Advanced AI Competitor Intelligence",
+    page_title="AI Real Time Competitor Intelligence",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -128,7 +128,7 @@ with st.sidebar:
 # MAIN UI — header + input
 # ─────────────────────────────────────────────────────────────────────
 
-st.title("🔍 Advanced AI Competitor Intelligence")
+st.title("🔍 AI Real Time Competitor Intelligence")
 st.caption("Real-time market research · 9 free data sources · AI synthesis")
 
 # Push optional keys into env so scrapers can read them
