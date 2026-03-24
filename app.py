@@ -128,7 +128,7 @@ with st.sidebar:
 # MAIN UI — header + input
 # ─────────────────────────────────────────────────────────────────────
 
-st.title("🔍 AI Competitor Intelligence")
+st.title("🔍 Advanced AI Competitor Intelligence")
 st.caption("Real-time market research · 9 free data sources · AI synthesis")
 
 # Push optional keys into env so scrapers can read them
