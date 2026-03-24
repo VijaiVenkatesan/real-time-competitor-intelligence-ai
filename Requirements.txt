@@ -1,0 +1,30 @@
+# ─── Core Framework ────────────────────────────────────────────────
+streamlit>=1.35.0
+langchain>=0.2.0
+langchain-groq>=0.1.6
+groq>=0.9.0
+
+# ─── Original Scraping ─────────────────────────────────────────────
+beautifulsoup4>=4.12.0
+trafilatura>=1.9.0
+requests>=2.31.0
+lxml>=5.2.0
+
+# ─── Yahoo Finance (free, no key) ──────────────────────────────────
+yfinance>=0.2.40
+pandas>=2.1.0
+
+# ─── Google Trends (free, no key — rate limited by Google) ─────────
+pytrends>=4.9.2
+
+# ─── Data Processing ───────────────────────────────────────────────
+numpy>=1.26.0
+
+# ─── Utility ───────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+
+# ── REMOVED (not truly free / require keys) ────────────────────────
+# newsapi-python   → replaced by Google News RSS (built-in xml.etree)
+# tweepy           → replaced by Reddit public JSON API
+# crunchbase       → replaced by Wikipedia + Wikidata + OpenCorporates
+# producthunt      → replaced by Product Hunt public RSS feed
