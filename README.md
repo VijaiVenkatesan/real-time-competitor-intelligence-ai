@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11-blue?style=for-the-badge&logo=python)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
-**[🚀 Try It Live →](https://competitor-intelligence-ai.streamlit.app/)**
+**[🚀 Try It Live →]**
 
 ---
 
