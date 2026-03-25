@@ -1,5 +1,6 @@
 """
-AI Real Time Competitor Intelligence — Real-Time Enhanced
+AI Competitor Intelligence — Real-Time Enhanced
+All API keys read from Streamlit Cloud secrets (never shown in UI).
 9 free data sources: Yahoo Finance, Google News RSS, Google Trends,
 GitHub, SEC Edgar, Product Hunt RSS, Wikipedia/Wikidata, Reddit, Job Boards
 """
@@ -8,14 +9,62 @@ import streamlit as st
 import os
 import json
 import time
+import warnings
 from datetime import datetime
 
+# Suppress pytrends FutureWarning from pandas fillna
+warnings.filterwarnings("ignore", category=FutureWarning, module="pytrends")
+
+import pandas as pd
+pd.set_option("future.no_silent_downcasting", True)
+
+
 # ─────────────────────────────────────────────────────────────────────
-# HELPERS  (must be defined before anything calls them)
+# SECRETS — read once at startup, never exposed in UI
+# ─────────────────────────────────────────────────────────────────────
+
+def _get_secret(key: str) -> str:
+    """Read from st.secrets first, then env vars, then empty string."""
+    try:
+        return st.secrets.get(key, os.getenv(key, ""))
+    except Exception:
+        return os.getenv(key, "")
+
+
+GROQ_API_KEY = _get_secret("GROQ_API_KEY")
+GITHUB_TOKEN = _get_secret("GITHUB_TOKEN")   # optional
+
+if GROQ_API_KEY:
+    os.environ["GROQ_API_KEY"] = GROQ_API_KEY
+if GITHUB_TOKEN:
+    os.environ["GITHUB_TOKEN"] = GITHUB_TOKEN
+
+
+# ─────────────────────────────────────────────────────────────────────
+# CURRENT GROQ MODELS  (as of March 2026)
+# Source: https://console.groq.com/docs/models
+# Decommissioned: llama-3.1-70b-versatile, mixtral-8x7b-32768
+# ─────────────────────────────────────────────────────────────────────
+
+GROQ_MODELS = {
+    # ── Production models (stable, recommended) ─────────────────────
+    "llama-3.1-8b-instant":              "Llama 3.1 8B  ⚡ Fastest  (production)",
+    "llama-3.3-70b-versatile":           "Llama 3.3 70B 🧠 Smartest (production)",
+    "openai/gpt-oss-120b":               "GPT-OSS 120B  🔬 Most capable (production)",
+    # ── Preview models (good quality, may change) ───────────────────
+    "meta-llama/llama-4-scout-17b-16e-instruct":    "Llama 4 Scout 17B 🦅 (preview)",
+    "meta-llama/llama-4-maverick-17b-128e-instruct": "Llama 4 Maverick 17B 🚀 (preview)",
+    "qwen/qwen-3-32b":                   "Qwen 3 32B  🌏 (preview)",
+}
+
+DEFAULT_MODEL = "llama-3.1-8b-instant"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# HELPERS
 # ─────────────────────────────────────────────────────────────────────
 
 def _init_groq(api_key: str, model: str):
-    """Initialise and return a Groq client, or None on failure."""
     try:
         from groq import Groq
         return Groq(api_key=api_key)
@@ -29,7 +78,6 @@ def _init_groq(api_key: str, model: str):
 
 def _ai_section(client, model: str, max_tokens: int,
                 system_prompt: str, user_prompt: str) -> str:
-    """Call Groq LLM and return the text response."""
     try:
         resp = client.chat.completions.create(
             model=model,
@@ -50,7 +98,7 @@ def _ai_section(client, model: str, max_tokens: int,
 # ─────────────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="AI Real Time Competitor Intelligence",
+    page_title="AI Competitor Intelligence",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -59,7 +107,6 @@ st.set_page_config(
 st.markdown("""
 <style>
 .metric-card {
-    background: var(--background-color);
     border: 1px solid rgba(128,128,128,0.2);
     border-radius: 10px; padding: 16px; margin: 6px 0;
 }
@@ -80,19 +127,6 @@ st.markdown("""
 
 with st.sidebar:
     st.title("⚙️ Configuration")
-    st.markdown("---")
-
-    st.subheader("🔑 API Keys")
-    groq_key = st.text_input(
-        "Groq API Key *", type="password",
-        value=os.getenv("GROQ_API_KEY", ""),
-        help="Required — free at console.groq.com",
-    )
-    github_token = st.text_input(
-        "GitHub Token", type="password",
-        value=os.getenv("GITHUB_TOKEN", ""),
-        help="Optional — raises rate limit 60→5000 req/hr",
-    )
 
     st.markdown("---")
     st.subheader("📡 Data Sources")
@@ -112,30 +146,41 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("🤖 AI Settings")
-    groq_model = st.selectbox(
+
+    model_display = st.selectbox(
         "Model",
-        ["llama-3.1-8b-instant", "llama-3.1-70b-versatile", "mixtral-8x7b-32768"],
+        options=list(GROQ_MODELS.keys()),
+        format_func=lambda x: GROQ_MODELS[x],
         index=0,
     )
+    groq_model = model_display   # actual model ID to send to API
+
     analysis_depth = st.select_slider(
         "Analysis Depth",
         options=["Quick", "Standard", "Deep"],
         value="Standard",
     )
 
+    st.markdown("---")
+    st.caption("🔒 API keys are stored in Streamlit Cloud secrets — not here.")
+
 
 # ─────────────────────────────────────────────────────────────────────
-# MAIN UI — header + input
+# MAIN UI
 # ─────────────────────────────────────────────────────────────────────
 
 st.title("🔍 AI Real Time Competitor Intelligence")
 st.caption("Real-time market research · 9 free data sources · AI synthesis")
 
-# Push optional keys into env so scrapers can read them
-if github_token:
-    os.environ["GITHUB_TOKEN"] = github_token
+if not GROQ_API_KEY:
+    st.error(
+        "**GROQ_API_KEY not found.**\n\n"
+        "Go to your Streamlit app → ⋮ menu → **Settings → Secrets** and add:\n"
+        "```toml\nGROQ_API_KEY = \"gsk_your_key_here\"\n```\n"
+        "Get a free key at [console.groq.com](https://console.groq.com)"
+    )
+    st.stop()
 
-# Map sidebar checkboxes → scraper keys
 source_map = {
     "yahoo_finance": use_yahoo,
     "news":          use_news,
@@ -143,13 +188,12 @@ source_map = {
     "github":        use_github,
     "sec":           use_sec,
     "product_hunt":  use_ph,
-    "crunchbase":    use_wiki,    # key name kept for scraper compatibility
-    "twitter":       use_reddit,  # key name kept for scraper compatibility
+    "crunchbase":    use_wiki,
+    "twitter":       use_reddit,
     "jobs":          use_jobs,
 }
 enabled_sources = [k for k, v in source_map.items() if v]
 
-# Human-readable labels for badges
 SOURCE_LABELS = {
     "yahoo_finance": "📈 Yahoo Finance",
     "news":          "📰 Google News",
@@ -172,24 +216,18 @@ with col_input:
 with col_btn:
     run_btn = st.button("🚀 Analyse", type="primary", use_container_width=True)
 
-# Gate: Groq key required
-if not groq_key:
-    st.warning("⚠️ Add your free Groq API key in the sidebar to start.")
-    st.stop()
-
-# Landing page — show source cards when no company entered
 if not company:
-    st.markdown("### 📡 Data Sources (all free, no keys)")
+    st.markdown("### 📡 Data Sources — all free, no keys")
     source_cards = [
-        ("📈 Yahoo Finance",   "Stock price, market cap, P/E",          "Real-time"),
-        ("📰 Google News RSS", "Latest articles + sentiment",            "Continuous"),
-        ("📊 Google Trends",   "Search interest & rising queries",       "Daily"),
-        ("💻 GitHub API",      "Tech stack, stars, commit activity",     "Real-time"),
-        ("📋 SEC Edgar",       "10-K / 10-Q filings (public cos.)",      "Real-time"),
-        ("🚀 Product Hunt RSS","Product launches & upvotes",             "Continuous"),
-        ("🏢 Wikipedia/Wikidata","Founded year, HQ, funding mentions",   "Continuous"),
-        ("🗣️ Reddit",           "Community mentions & sentiment",         "Real-time"),
-        ("👔 Greenhouse/Lever", "Open roles → hiring trends",            "Daily"),
+        ("📈 Yahoo Finance",    "Stock price, market cap, P/E",          "Real-time"),
+        ("📰 Google News RSS",  "Latest articles + sentiment",            "Continuous"),
+        ("📊 Google Trends",    "Search interest & rising queries",       "Daily"),
+        ("💻 GitHub API",       "Tech stack, stars, commit activity",     "Real-time"),
+        ("📋 SEC Edgar",        "10-K / 10-Q filings (public cos.)",      "Real-time"),
+        ("🚀 Product Hunt RSS", "Product launches & upvotes",             "Continuous"),
+        ("🏢 Wikipedia/Wikidata","Founded year, HQ, funding mentions",    "Continuous"),
+        ("🗣️ Reddit",            "Community mentions & sentiment",         "Real-time"),
+        ("👔 Greenhouse/Lever",  "Open roles → hiring trends",            "Daily"),
     ]
     cols = st.columns(3)
     for i, (name, desc, freq) in enumerate(source_cards):
@@ -197,7 +235,7 @@ if not company:
             st.markdown(
                 f'<div class="metric-card"><b>{name}</b><br>'
                 f'<small>{desc}</small><br>'
-                f'<small>🕒 {freq} &nbsp;·&nbsp; 🟢 Free</small></div>',
+                f'<small>🕒 {freq} &nbsp;·&nbsp; 🟢 Free · No key</small></div>',
                 unsafe_allow_html=True,
             )
     st.stop()
@@ -209,8 +247,7 @@ if not company:
 
 if run_btn and company:
 
-    # Initialise Groq client
-    groq_client = _init_groq(groq_key, groq_model)
+    groq_client = _init_groq(GROQ_API_KEY, groq_model)
     if not groq_client:
         st.stop()
 
@@ -245,12 +282,12 @@ if run_btn and company:
     for key, label in SOURCE_LABELS.items():
         if key not in data:
             continue
-        css = "warn" if data[key].get("error") else ""
-        icon = "⚠️" if css else "✅"
+        has_err = bool(data[key].get("error"))
+        css  = "warn" if has_err else ""
+        icon = "⚠️"  if has_err else "✅"
         badge_html += f'<span class="source-badge {css}">{label} {icon}</span>'
     st.markdown(badge_html, unsafe_allow_html=True)
 
-    # ── Step 2: Analysis tabs ────────────────────────────────────────
     overall_progress.progress(40, text="🤖 Running AI analysis…")
 
     tabs = st.tabs([
@@ -259,7 +296,6 @@ if run_btn and company:
         "⚔️ SWOT", "📋 Raw Data",
     ])
 
-    # Convenience wrapper with closed-over client / model / tokens
     def ai(system: str, prompt: str) -> str:
         return _ai_section(groq_client, groq_model, max_tok, system, prompt)
 
@@ -281,9 +317,11 @@ if run_btn and company:
         with m1:
             price = yf.get("current_price")
             chg   = yf.get("price_change_30d_pct", 0)
-            st.metric("Stock Price",
-                      f"${price:.2f}" if price else "Private",
-                      delta=f"{chg:.1f}% (30d)" if price else None)
+            st.metric(
+                "Stock Price",
+                f"${price:.2f}" if price else "Private",
+                delta=f"{chg:.1f}% (30d)" if price else None,
+            )
         with m2:
             from scrapers.yahoo_finance import format_market_cap
             mc = yf.get("market_cap")
@@ -307,7 +345,7 @@ if run_btn and company:
 
         fin_ctx = (
             f"Yahoo Finance: {json.dumps(yf_data, default=str)}\n"
-            f"Company data: {json.dumps(cb_data, default=str)}\n"
+            f"Company data (Wikipedia/Wikidata): {json.dumps(cb_data, default=str)}\n"
             f"SEC filings: {json.dumps(sec_data, default=str)}"
         )
         with st.spinner("Analysing financial data…"):
@@ -319,7 +357,6 @@ if run_btn and company:
 
         price_hist = yf_data.get("price_history_30d", [])
         if price_hist:
-            import pandas as pd
             df = pd.DataFrame(price_hist).set_index("date")
             st.line_chart(df["close"])
 
@@ -328,15 +365,16 @@ if run_btn and company:
             st.markdown("**Recent SEC Filings**")
             for f in filings[:6]:
                 st.markdown(
-                    f"- **{f['form']}** | {f.get('filing_date','')} | "
-                    f"[View filing]({f.get('url','#')})"
+                    f"- **{f['form']}** | {f.get('filing_date', '')} | "
+                    f"[View filing]({f.get('url', '#')})"
                 )
+
         overall_progress.progress(65)
 
     # ── Tab 2: News & Sentiment ──────────────────────────────────────
     with tabs[2]:
         news_d   = data.get("news", {})
-        reddit_d = data.get("twitter", {})   # key kept for compat
+        reddit_d = data.get("twitter", {})
 
         sent_ctx = (
             f"News: {json.dumps(news_d, default=str)}\n"
@@ -360,7 +398,7 @@ if run_btn and company:
         with c2:
             st.markdown("**🗣️ Top Reddit Discussions**")
             for t in (reddit_d.get("top_tweets") or [])[:6]:
-                text = (t.get("text") or "")[:120]
+                text  = (t.get("text") or "")[:120]
                 likes = t.get("likes", 0)
                 st.markdown(f"- {text} 👍{likes}")
 
@@ -394,7 +432,6 @@ if run_btn and company:
         with c2:
             iot = trends_d.get("interest_over_time", [])
             if iot:
-                import pandas as pd
                 df = pd.DataFrame(iot).set_index("date")
                 st.markdown("**📊 Search Interest (Google Trends)**")
                 st.area_chart(df["interest"])
@@ -445,7 +482,6 @@ if run_btn and company:
             c2.metric("💼 Sales",       ha.get("sales_roles", 0))
             c3.metric("📣 Marketing",   ha.get("marketing_roles", 0))
             c4.metric("🎯 Product",     ha.get("product_roles", 0))
-
             if ha.get("inferred_growth_phase"):
                 st.info(f"**Growth phase:** {ha['inferred_growth_phase']}")
             if ha.get("remote_roles"):
@@ -460,7 +496,7 @@ if run_btn and company:
                 BASE_SYSTEM,
                 f"Generate a comprehensive SWOT analysis for {company} using ALL the data below. "
                 f"Be specific — cite actual numbers, dates, and facts. "
-                f"Format as: ## Strengths / ## Weaknesses / ## Opportunities / ## Threats\n\n{llm_context}",
+                f"Format: ## Strengths / ## Weaknesses / ## Opportunities / ## Threats\n\n{llm_context}",
             ))
         overall_progress.progress(98)
 
