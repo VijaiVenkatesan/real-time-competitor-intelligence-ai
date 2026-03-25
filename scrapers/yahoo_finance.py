@@ -1,112 +1,190 @@
 """
-Yahoo Finance Scraper - Real-time stock price, market cap, financials
-No API key required - uses yfinance library.
-Includes retry logic and rate-limit handling.
+Financial Data Scraper
+Primary:  Finnhub API  — free tier, 60 calls/min, no IP blocking, official API
+Fallback: yfinance     — works sometimes on local/non-shared IPs
+
+Finnhub free tier: https://finnhub.io/register  (free, no credit card)
+Add FINNHUB_API_KEY to Streamlit secrets for best results.
+Without a key, falls back to yfinance.
 """
 
+import os
 import time
-import random
+import requests
 import logging
-from datetime import datetime
-
-import yfinance as yf
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
-# Common ticker overrides for well-known private/non-US companies
-# yfinance search sometimes returns wrong tickers for these
+FINNHUB_BASE = "https://finnhub.io/api/v1"
+
+# Known private companies — skip all stock lookups immediately
+PRIVATE_COMPANIES = {
+    "openai", "anthropic", "stripe", "notion", "figma", "canva",
+    "databricks", "spacex", "klarna", "revolut", "chime", "brex",
+    "plaid", "airtable", "miro", "linear", "vercel", "supabase",
+    "retool", "posthog", "cal.com", "resend",
+}
+
+# Ticker overrides for well-known public companies
 TICKER_OVERRIDES = {
-    "openai":       None,   # private company — no ticker
-    "anthropic":    None,
-    "stripe":       None,
-    "notion":       None,
-    "figma":        None,
-    "canva":        None,
-    "databricks":   None,
-    "spacex":       None,
-    "shopify":      "SHOP",
-    "microsoft":    "MSFT",
-    "google":       "GOOGL",
-    "alphabet":     "GOOGL",
-    "amazon":       "AMZN",
-    "apple":        "AAPL",
-    "meta":         "META",
-    "netflix":      "NFLX",
-    "tesla":        "TSLA",
-    "nvidia":       "NVDA",
-    "salesforce":   "CRM",
-    "atlassian":    "TEAM",
-    "cloudflare":   "NET",
-    "twilio":       "TWLO",
-    "datadog":      "DDOG",
-    "snowflake":    "SNOW",
-    "palantir":     "PLTR",
-    "hubspot":      "HUBS",
-    "zendesk":      "ZEN",
+    "google": "GOOGL", "alphabet": "GOOGL", "microsoft": "MSFT",
+    "apple": "AAPL", "amazon": "AMZN", "meta": "META",
+    "netflix": "NFLX", "tesla": "TSLA", "nvidia": "NVDA",
+    "shopify": "SHOP", "salesforce": "CRM", "atlassian": "TEAM",
+    "cloudflare": "NET", "twilio": "TWLO", "datadog": "DDOG",
+    "snowflake": "SNOW", "palantir": "PLTR", "hubspot": "HUBS",
+    "adobe": "ADBE", "oracle": "ORCL", "sap": "SAP",
+    "servicenow": "NOW", "workday": "WDAY", "zendesk": "ZEN",
+    "zoom": "ZM", "slack": "WORK", "twitter": "TWTR",
 }
 
 
-def get_stock_ticker(company_name: str) -> str | None:
-    """
-    Resolve a company name to a ticker symbol.
-    Checks override dict first, then queries Yahoo Finance search API.
-    Returns None for known private companies.
-    """
-    key = company_name.lower().strip()
+def _get_finnhub_key() -> str:
+    try:
+        import streamlit as st
+        return st.secrets.get("FINNHUB_API_KEY", os.getenv("FINNHUB_API_KEY", ""))
+    except Exception:
+        return os.getenv("FINNHUB_API_KEY", "")
 
-    # Check override table first
-    if key in TICKER_OVERRIDES:
-        ticker = TICKER_OVERRIDES[key]
-        if ticker is None:
-            logger.info(f"{company_name} is a known private company — no ticker")
-        return ticker
 
-    # Query Yahoo Finance search endpoint with retry
-    import requests
-    for attempt in range(3):
-        try:
-            resp = requests.get(
-                "https://query2.finance.yahoo.com/v1/finance/search",
-                params={"q": company_name, "quotesCount": 1, "newsCount": 0},
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 Chrome/122.0 Safari/537.36"
-                    ),
-                    "Accept": "application/json",
-                },
-                timeout=10,
-            )
-            if resp.status_code == 429:
-                wait = 2 ** attempt + random.uniform(0, 1)
-                logger.warning(f"Yahoo rate limited, waiting {wait:.1f}s (attempt {attempt+1})")
-                time.sleep(wait)
-                continue
-            if resp.status_code != 200:
-                break
-            quotes = resp.json().get("quotes", [])
-            if quotes:
-                return quotes[0].get("symbol")
-        except Exception as e:
-            logger.warning(f"Ticker lookup attempt {attempt+1} failed: {e}")
-            time.sleep(1)
-
+def _finnhub_get(endpoint: str, params: dict) -> dict | None:
+    """Make a Finnhub API call. Returns None on error."""
+    key = _get_finnhub_key()
+    if not key:
+        return None
+    try:
+        resp = requests.get(
+            f"{FINNHUB_BASE}/{endpoint}",
+            params={**params, "token": key},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        logger.warning(f"Finnhub {endpoint} returned {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"Finnhub error: {e}")
     return None
+
+
+def _search_ticker_finnhub(company_name: str) -> str | None:
+    """Search Finnhub for a company ticker."""
+    data = _finnhub_get("search", {"q": company_name})
+    if data and data.get("result"):
+        # Prefer exact matches or common stock (type = "Common Stock")
+        for item in data["result"][:5]:
+            if item.get("type") in ("Common Stock", "EQS"):
+                return item.get("symbol")
+        return data["result"][0].get("symbol")
+    return None
+
+
+def _get_via_finnhub(ticker: str) -> dict:
+    """Fetch stock quote and company profile from Finnhub."""
+    result = {}
+
+    # Quote (real-time price)
+    quote = _finnhub_get("quote", {"symbol": ticker})
+    if quote and quote.get("c"):
+        result["current_price"]      = round(quote["c"], 2)
+        result["price_change_pct"]   = round(quote.get("dp", 0), 2)
+        result["52w_high"]           = quote.get("h")
+        result["52w_low"]            = quote.get("l")
+        result["previous_close"]     = quote.get("pc")
+
+    # Company profile
+    profile = _finnhub_get("stock/profile2", {"symbol": ticker})
+    if profile:
+        result["company_name"]   = profile.get("name")
+        result["market_cap"]     = profile.get("marketCapitalization", 0) * 1e6  # Finnhub gives millions
+        result["employee_count"] = profile.get("employeeTotal")
+        result["sector"]         = profile.get("finnhubIndustry")
+        result["country"]        = profile.get("country")
+        result["currency"]       = profile.get("currency", "USD")
+        result["ipo_date"]       = profile.get("ipo")
+        result["logo"]           = profile.get("logo")
+        result["weburl"]         = profile.get("weburl")
+
+    # Basic financials (P/E, revenue etc.)
+    metrics = _finnhub_get("stock/metric", {"symbol": ticker, "metric": "all"})
+    if metrics and metrics.get("metric"):
+        m = metrics["metric"]
+        result["pe_ratio"]      = m.get("peNormalizedAnnual")
+        result["revenue_ttm"]   = m.get("revenuePerShareAnnual")
+        result["profit_margin"] = m.get("netProfitMarginAnnual")
+        result["eps"]           = m.get("epsNormalizedAnnual")
+        result["52w_high"]      = m.get("52WeekHigh") or result.get("52w_high")
+        result["52w_low"]       = m.get("52WeekLow")  or result.get("52w_low")
+
+    # 30-day price history (candles)
+    end   = int(time.time())
+    start = int((datetime.utcnow() - timedelta(days=35)).timestamp())
+    candles = _finnhub_get("stock/candle", {
+        "symbol": ticker, "resolution": "D",
+        "from": start, "to": end,
+    })
+    if candles and candles.get("s") == "ok" and candles.get("c"):
+        closes = candles["c"]
+        timestamps = candles["t"]
+        result["price_history_30d"] = [
+            {"date": str(datetime.fromtimestamp(t).date()), "close": round(c, 2)}
+            for t, c in zip(timestamps, closes)
+        ]
+        if len(closes) >= 2:
+            result["price_change_30d_pct"] = round(
+                ((closes[-1] - closes[0]) / closes[0]) * 100, 2
+            )
+
+    return result
+
+
+def _get_via_yfinance(ticker: str) -> dict:
+    """Fallback: try yfinance (may be rate-limited on shared IPs)."""
+    result = {}
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        info = t.info
+        if not info or len(info) < 5:
+            return result
+        result["current_price"]  = info.get("currentPrice") or info.get("regularMarketPrice")
+        result["market_cap"]     = info.get("marketCap")
+        result["pe_ratio"]       = info.get("trailingPE")
+        result["52w_high"]       = info.get("fiftyTwoWeekHigh")
+        result["52w_low"]        = info.get("fiftyTwoWeekLow")
+        result["revenue_ttm"]    = info.get("totalRevenue")
+        result["profit_margin"]  = info.get("profitMargins")
+        result["employee_count"] = info.get("fullTimeEmployees")
+        result["sector"]         = info.get("sector")
+        result["currency"]       = info.get("currency", "USD")
+        result["description"]    = (info.get("longBusinessSummary") or "")[:500]
+        hist = t.history(period="1mo")
+        if not hist.empty:
+            prices = hist["Close"].tolist()
+            dates  = [str(d.date()) for d in hist.index]
+            result["price_history_30d"] = [
+                {"date": d, "close": round(p, 2)} for d, p in zip(dates, prices)
+            ]
+            if len(prices) >= 2:
+                result["price_change_30d_pct"] = round(
+                    ((prices[-1] - prices[0]) / prices[0]) * 100, 2
+                )
+    except Exception as e:
+        logger.warning(f"yfinance fallback failed for {ticker}: {e}")
+    return result
 
 
 def get_financial_data(company_name: str) -> dict:
     """
-    Fetch real-time financial data from Yahoo Finance.
-    Returns stock price, market cap, P/E ratio, revenue, and 30-day price history.
-    Handles rate limits with exponential backoff.
+    Fetch financial data. Uses Finnhub if API key available, falls back to yfinance.
     """
     result = {
-        "source": "Yahoo Finance",
+        "source": "Finnhub (free API)",
         "company": company_name,
         "fetched_at": datetime.utcnow().isoformat(),
         "ticker": None,
         "current_price": None,
-        "currency": None,
+        "currency": "USD",
         "market_cap": None,
         "pe_ratio": None,
         "52w_high": None,
@@ -117,98 +195,62 @@ def get_financial_data(company_name: str) -> dict:
         "price_history_30d": [],
         "employee_count": None,
         "sector": None,
-        "industry": None,
-        "description": None,
         "is_private": False,
+        "description": None,
         "error": None,
     }
 
-    ticker_symbol = get_stock_ticker(company_name)
+    key = company_name.lower().strip()
 
-    # Known private company
-    if ticker_symbol is None and company_name.lower().strip() in TICKER_OVERRIDES:
+    # Known private company — skip immediately
+    if key in PRIVATE_COMPANIES:
         result["is_private"] = True
+        result["source"] = "N/A (private company)"
         result["error"] = (
-            f"{company_name} is a private company — no public stock data available. "
-            "Financial data sourced from Wikipedia/Wikidata instead."
+            f"{company_name} is a private company — no public stock data. "
+            "Funding info sourced from Wikipedia/Wikidata."
         )
         return result
 
-    if not ticker_symbol:
+    # Resolve ticker
+    ticker = TICKER_OVERRIDES.get(key)
+    if not ticker:
+        ticker = _search_ticker_finnhub(company_name)
+    if not ticker:
         result["error"] = (
-            "Could not resolve ticker symbol. Company may be private, "
-            "non-US listed, or named differently on exchanges."
+            "Could not resolve ticker. Company may be private, "
+            "non-US listed, or try adding FINNHUB_API_KEY to secrets."
         )
         return result
 
-    result["ticker"] = ticker_symbol
+    result["ticker"] = ticker
 
-    # Fetch with retry on rate limit
-    for attempt in range(3):
-        try:
-            ticker = yf.Ticker(ticker_symbol)
-            info   = ticker.info
+    # Try Finnhub first
+    finnhub_key = _get_finnhub_key()
+    if finnhub_key:
+        data = _get_via_finnhub(ticker)
+        if data:
+            result.update(data)
+            return result
+        result["error"] = "Finnhub returned no data for this ticker."
 
-            # yfinance returns an empty/minimal dict on rate limit — detect it
-            if not info or len(info) < 5:
-                if attempt < 2:
-                    wait = 2 ** attempt + random.uniform(0.5, 1.5)
-                    logger.warning(f"Empty yfinance response, retrying in {wait:.1f}s")
-                    time.sleep(wait)
-                    continue
-                else:
-                    result["error"] = "Yahoo Finance returned empty data (rate limited). Try again in 30s."
-                    return result
-
-            result["current_price"]      = info.get("currentPrice") or info.get("regularMarketPrice")
-            result["currency"]           = info.get("currency", "USD")
-            result["market_cap"]         = info.get("marketCap")
-            result["pe_ratio"]           = info.get("trailingPE")
-            result["52w_high"]           = info.get("fiftyTwoWeekHigh")
-            result["52w_low"]            = info.get("fiftyTwoWeekLow")
-            result["revenue_ttm"]        = info.get("totalRevenue")
-            result["profit_margin"]      = info.get("profitMargins")
-            result["employee_count"]     = info.get("fullTimeEmployees")
-            result["sector"]             = info.get("sector")
-            result["industry"]           = info.get("industry")
-            result["description"]        = (info.get("longBusinessSummary") or "")[:500]
-
-            # 30-day price history
-            hist = ticker.history(period="1mo")
-            if not hist.empty:
-                prices = hist["Close"].tolist()
-                dates  = [str(d.date()) for d in hist.index]
-                result["price_history_30d"] = [
-                    {"date": d, "close": round(p, 2)} for d, p in zip(dates, prices)
-                ]
-                if len(prices) >= 2:
-                    result["price_change_30d_pct"] = round(
-                        ((prices[-1] - prices[0]) / prices[0]) * 100, 2
-                    )
-
-            break  # success — exit retry loop
-
-        except Exception as e:
-            err_str = str(e).lower()
-            if "429" in err_str or "too many" in err_str or "rate" in err_str:
-                if attempt < 2:
-                    wait = 3 ** attempt + random.uniform(1, 2)
-                    logger.warning(f"Yahoo Finance rate limited, waiting {wait:.1f}s")
-                    time.sleep(wait)
-                    continue
-                result["error"] = (
-                    "Yahoo Finance rate limited (Too Many Requests). "
-                    "This is temporary — retry in 30–60 seconds."
-                )
-            else:
-                result["error"] = str(e)
-                logger.error(f"Yahoo Finance error for {company_name}: {e}")
-            break
+    # Fallback to yfinance
+    result["source"] = "yfinance (fallback)"
+    data = _get_via_yfinance(ticker)
+    if data:
+        result.update(data)
+        result.pop("error", None)
+    else:
+        result["error"] = (
+            "Both Finnhub and yfinance failed. "
+            "Add FINNHUB_API_KEY to Streamlit secrets for reliable stock data. "
+            "Get a free key at finnhub.io/register (no credit card)."
+        )
 
     return result
 
 
-def format_market_cap(value: int | None) -> str:
+def format_market_cap(value: float | int | None) -> str:
     if not value:
         return "N/A"
     if value >= 1e12:
@@ -217,4 +259,4 @@ def format_market_cap(value: int | None) -> str:
         return f"${value / 1e9:.2f}B"
     if value >= 1e6:
         return f"${value / 1e6:.2f}M"
-    return f"${value:,}"
+    return f"${value:,.0f}"
