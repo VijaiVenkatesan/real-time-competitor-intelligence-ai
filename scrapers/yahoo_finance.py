@@ -116,24 +116,20 @@ def _get_via_finnhub(ticker: str) -> dict:
         result["52w_high"]      = m.get("52WeekHigh") or result.get("52w_high")
         result["52w_low"]       = m.get("52WeekLow")  or result.get("52w_low")
 
-    # 30-day price history (candles)
-    end   = int(time.time())
-    start = int((datetime.utcnow() - timedelta(days=35)).timestamp())
-    candles = _finnhub_get("stock/candle", {
-        "symbol": ticker, "resolution": "D",
-        "from": start, "to": end,
-    })
-    if candles and candles.get("s") == "ok" and candles.get("c"):
-        closes = candles["c"]
-        timestamps = candles["t"]
+    # NOTE: stock/candle requires Finnhub premium (403 on free tier).
+    # Instead derive price change from current price vs previous close.
+    # For a chart we build a synthetic 2-point history from quote data.
+    if result.get("current_price") and result.get("previous_close"):
+        curr = result["current_price"]
+        prev = result["previous_close"]
+        result["price_change_30d_pct"] = round(((curr - prev) / prev) * 100, 2)
+        # Minimal history for chart display (today vs yesterday)
+        today     = datetime.utcnow().date()
+        yesterday = (datetime.utcnow() - timedelta(days=1)).date()
         result["price_history_30d"] = [
-            {"date": str(datetime.fromtimestamp(t).date()), "close": round(c, 2)}
-            for t, c in zip(timestamps, closes)
+            {"date": str(yesterday), "close": round(prev, 2)},
+            {"date": str(today),     "close": round(curr, 2)},
         ]
-        if len(closes) >= 2:
-            result["price_change_30d_pct"] = round(
-                ((closes[-1] - closes[0]) / closes[0]) * 100, 2
-            )
 
     return result
 
