@@ -10,21 +10,14 @@ trafilatura>=1.9.0
 requests>=2.31.0
 lxml>=5.2.0
 
-# ─── Yahoo Finance (free, no key) ──────────────────────────────────
-yfinance>=0.2.40
+# ─── Financial Data ────────────────────────────────────────────────
+finnhub-python>=2.4.20   # Primary: free API, no IP blocking, 60 calls/min
+yfinance>=0.2.40         # Fallback only (rate-limited on shared cloud IPs)
 pandas>=2.1.0
-
-# ─── Google Trends (free, no key — rate limited by Google) ─────────
-pytrends>=4.9.2
-
-# ─── Data Processing ───────────────────────────────────────────────
 numpy>=1.26.0
+
+# ─── Google Trends ─────────────────────────────────────────────────
+pytrends>=4.9.2
 
 # ─── Utility ───────────────────────────────────────────────────────
 python-dotenv>=1.0.0
-
-# ── REMOVED (not truly free / require keys) ────────────────────────
-# newsapi-python   → replaced by Google News RSS (built-in xml.etree)
-# tweepy           → replaced by Reddit public JSON API
-# crunchbase       → replaced by Wikipedia + Wikidata + OpenCorporates
-# producthunt      → replaced by Product Hunt public RSS feed
