@@ -12,7 +12,6 @@ import time
 import warnings
 from datetime import datetime
 
-# Suppress pytrends FutureWarning from pandas fillna
 warnings.filterwarnings("ignore", category=FutureWarning, module="pytrends")
 
 import pandas as pd
@@ -20,11 +19,10 @@ pd.set_option("future.no_silent_downcasting", True)
 
 
 # ─────────────────────────────────────────────────────────────────────
-# SECRETS — read once at startup, never exposed in UI
+# SECRETS
 # ─────────────────────────────────────────────────────────────────────
 
 def _get_secret(key: str) -> str:
-    """Read from st.secrets first, then env vars, then empty string."""
     try:
         return st.secrets.get(key, os.getenv(key, ""))
     except Exception:
@@ -32,7 +30,7 @@ def _get_secret(key: str) -> str:
 
 
 GROQ_API_KEY = _get_secret("GROQ_API_KEY")
-GITHUB_TOKEN = _get_secret("GITHUB_TOKEN")   # optional
+GITHUB_TOKEN = _get_secret("GITHUB_TOKEN")
 
 if GROQ_API_KEY:
     os.environ["GROQ_API_KEY"] = GROQ_API_KEY
@@ -41,23 +39,34 @@ if GITHUB_TOKEN:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# CURRENT GROQ MODELS  (as of March 2026)
-# Source: https://console.groq.com/docs/models
+# GROQ MODELS — current active models only (March 2026)
 # Decommissioned: llama-3.1-70b-versatile, mixtral-8x7b-32768
 # ─────────────────────────────────────────────────────────────────────
 
 GROQ_MODELS = {
-    # ── Production models (stable, recommended) ─────────────────────
-    "llama-3.1-8b-instant":              "Llama 3.1 8B  ⚡ Fastest  (production)",
-    "llama-3.3-70b-versatile":           "Llama 3.3 70B 🧠 Smartest (production)",
-    "openai/gpt-oss-120b":               "GPT-OSS 120B  🔬 Most capable (production)",
-    # ── Preview models (good quality, may change) ───────────────────
-    "meta-llama/llama-4-scout-17b-16e-instruct":    "Llama 4 Scout 17B 🦅 (preview)",
-    "meta-llama/llama-4-maverick-17b-128e-instruct": "Llama 4 Maverick 17B 🚀 (preview)",
-    "qwen/qwen-3-32b":                   "Qwen 3 32B  🌏 (preview)",
+    "llama-3.1-8b-instant":                          "Llama 3.1 8B  ⚡ Fastest (production)",
+    "llama-3.3-70b-versatile":                        "Llama 3.3 70B 🧠 Best quality (production)",
+    "meta-llama/llama-4-scout-17b-16e-instruct":      "Llama 4 Scout 17B 🦅 (preview)",
+    "meta-llama/llama-4-maverick-17b-128e-instruct":  "Llama 4 Maverick 17B 🚀 (preview)",
+    "qwen/qwen-3-32b":                                "Qwen 3 32B 🌏 (preview)",
 }
 
-DEFAULT_MODEL = "llama-3.1-8b-instant"
+# Token limits per model — Groq enforces per-model maximums
+# Keep well below the hard ceiling to avoid truncation errors
+MODEL_MAX_TOKENS = {
+    "llama-3.1-8b-instant":                          8000,
+    "llama-3.3-70b-versatile":                        8000,
+    "meta-llama/llama-4-scout-17b-16e-instruct":      8000,
+    "meta-llama/llama-4-maverick-17b-128e-instruct":  8000,
+    "qwen/qwen-3-32b":                                8000,
+}
+
+# Tokens per analysis section based on depth setting
+DEPTH_TOKENS = {
+    "Quick":    1200,
+    "Standard": 2000,
+    "Deep":     4000,
+}
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -78,6 +87,12 @@ def _init_groq(api_key: str, model: str):
 
 def _ai_section(client, model: str, max_tokens: int,
                 system_prompt: str, user_prompt: str) -> str:
+    """
+    Call Groq LLM. Caps max_tokens to the model's known limit.
+    Uses temperature=0.3 for factual, grounded analysis.
+    """
+    cap = MODEL_MAX_TOKENS.get(model, 8000)
+    actual_tokens = min(max_tokens, cap)
     try:
         resp = client.chat.completions.create(
             model=model,
@@ -85,12 +100,23 @@ def _ai_section(client, model: str, max_tokens: int,
                 {"role": "system", "content": system_prompt},
                 {"role": "user",   "content": user_prompt},
             ],
-            max_tokens=max_tokens,
+            max_tokens=actual_tokens,
             temperature=0.3,
         )
         return resp.choices[0].message.content
     except Exception as e:
-        return f"⚠️ AI analysis failed: {e}"
+        err = str(e)
+        if "decommissioned" in err or "model_decommissioned" in err:
+            return (
+                f"⚠️ **Model `{model}` has been decommissioned by Groq.**\n\n"
+                "Please select a different model from the sidebar."
+            )
+        if "rate_limit" in err.lower() or "429" in err:
+            return (
+                "⚠️ **Groq rate limit hit.** Please wait 30 seconds and try again, "
+                "or switch to a faster model (Llama 3.1 8B) in the sidebar."
+            )
+        return f"⚠️ AI analysis failed: {err}"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -147,13 +173,12 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🤖 AI Settings")
 
-    model_display = st.selectbox(
+    groq_model = st.selectbox(
         "Model",
         options=list(GROQ_MODELS.keys()),
         format_func=lambda x: GROQ_MODELS[x],
         index=0,
     )
-    groq_model = model_display   # actual model ID to send to API
 
     analysis_depth = st.select_slider(
         "Analysis Depth",
@@ -161,8 +186,12 @@ with st.sidebar:
         value="Standard",
     )
 
+    # Show token budget info
+    toks = DEPTH_TOKENS[analysis_depth]
+    st.caption(f"📝 {toks:,} tokens per section · {toks * 7} tabs ≈ {toks * 7:,} total")
+
     st.markdown("---")
-    st.caption("🔒 API keys are stored in Streamlit Cloud secrets — not here.")
+    st.caption("🔒 API keys stored in Streamlit Cloud secrets — not shown here.")
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -174,8 +203,8 @@ st.caption("Real-time market research · 9 free data sources · AI synthesis")
 
 if not GROQ_API_KEY:
     st.error(
-        "**GROQ_API_KEY not found.**\n\n"
-        "Go to your Streamlit app → ⋮ menu → **Settings → Secrets** and add:\n"
+        "**GROQ_API_KEY not found in Streamlit secrets.**\n\n"
+        "Go to your app → ⋮ → **Settings → Secrets** and add:\n"
         "```toml\nGROQ_API_KEY = \"gsk_your_key_here\"\n```\n"
         "Get a free key at [console.groq.com](https://console.groq.com)"
     )
@@ -219,15 +248,15 @@ with col_btn:
 if not company:
     st.markdown("### 📡 Data Sources — all free, no keys")
     source_cards = [
-        ("📈 Yahoo Finance",    "Stock price, market cap, P/E",          "Real-time"),
-        ("📰 Google News RSS",  "Latest articles + sentiment",            "Continuous"),
-        ("📊 Google Trends",    "Search interest & rising queries",       "Daily"),
-        ("💻 GitHub API",       "Tech stack, stars, commit activity",     "Real-time"),
-        ("📋 SEC Edgar",        "10-K / 10-Q filings (public cos.)",      "Real-time"),
-        ("🚀 Product Hunt RSS", "Product launches & upvotes",             "Continuous"),
-        ("🏢 Wikipedia/Wikidata","Founded year, HQ, funding mentions",    "Continuous"),
-        ("🗣️ Reddit",            "Community mentions & sentiment",         "Real-time"),
-        ("👔 Greenhouse/Lever",  "Open roles → hiring trends",            "Daily"),
+        ("📈 Yahoo Finance",     "Stock price, market cap, P/E",          "Real-time"),
+        ("📰 Google News RSS",   "Latest articles + sentiment",            "Continuous"),
+        ("📊 Google Trends",     "Search interest & rising queries",       "Daily"),
+        ("💻 GitHub API",        "Tech stack, stars, commit activity",     "Real-time"),
+        ("📋 SEC Edgar",         "10-K / 10-Q filings (public cos.)",      "Real-time"),
+        ("🚀 Product Hunt RSS",  "Product launches & upvotes",             "Continuous"),
+        ("🏢 Wikipedia/Wikidata","Founded year, HQ, funding mentions",     "Continuous"),
+        ("🗣️ Reddit",             "Community mentions & sentiment",         "Real-time"),
+        ("👔 Greenhouse/Lever",  "Open roles → hiring trends",             "Daily"),
     ]
     cols = st.columns(3)
     for i, (name, desc, freq) in enumerate(source_cards):
@@ -251,21 +280,22 @@ if run_btn and company:
     if not groq_client:
         st.stop()
 
-    depth_tokens = {"Quick": 400, "Standard": 800, "Deep": 1500}
-    max_tok = depth_tokens[analysis_depth]
+    max_tok = DEPTH_TOKENS[analysis_depth]
 
     BASE_SYSTEM = (
         "You are an expert competitive intelligence analyst. "
-        "Analyse the provided real-time data and give actionable, specific insights. "
-        "Be concise, data-driven, and ground every claim in the data provided. "
-        "Use bullet points and emojis for readability."
+        "Analyse the provided real-time data and give thorough, complete, actionable insights. "
+        "IMPORTANT: Always write complete sentences and complete all sections fully — "
+        "never stop mid-sentence or leave a section unfinished. "
+        "Be data-driven and ground every claim in the provided data. "
+        "Use bullet points, bold text, and emojis for readability."
     )
 
     st.markdown(f"## 🔎 Analysing: **{company}**")
     overall_progress = st.progress(0, text="Starting data collection…")
     status_box = st.empty()
 
-    # ── Step 1: Parallel data collection ────────────────────────────
+    # ── Step 1: Data collection ──────────────────────────────────────
     status_box.info(f"📡 Collecting from {len(enabled_sources)} sources in parallel…")
     t_start = time.time()
 
@@ -277,16 +307,35 @@ if run_btn and company:
     elapsed = round(time.time() - t_start, 1)
     overall_progress.progress(30, text=f"✅ Data collected in {elapsed}s")
 
-    # Source status badges
+    # Source badges
     badge_html = ""
     for key, label in SOURCE_LABELS.items():
         if key not in data:
             continue
-        has_err = bool(data[key].get("error"))
-        css  = "warn" if has_err else ""
-        icon = "⚠️"  if has_err else "✅"
-        badge_html += f'<span class="source-badge {css}">{label} {icon}</span>'
+        src     = data[key]
+        has_err = bool(src.get("error"))
+        # For Yahoo Finance: rate limit is temporary, show different colour
+        yf_rate_limited = (
+            key == "yahoo_finance"
+            and has_err
+            and "rate" in (src.get("error") or "").lower()
+        )
+        if yf_rate_limited:
+            badge_html += f'<span class="source-badge warn">{label} 🔄</span>'
+        elif has_err:
+            badge_html += f'<span class="source-badge warn">{label} ⚠️</span>'
+        else:
+            badge_html += f'<span class="source-badge">{label} ✅</span>'
     st.markdown(badge_html, unsafe_allow_html=True)
+
+    # Show Yahoo rate-limit note if triggered
+    yf_data = data.get("yahoo_finance", {})
+    if yf_data.get("error") and "rate" in (yf_data.get("error") or "").lower():
+        st.warning(
+            "⏱️ **Yahoo Finance is rate-limiting requests from Streamlit Cloud's shared IP.** "
+            "Stock/market cap data may be unavailable this run. "
+            "All other sources are unaffected — re-run in ~60s to get financial data."
+        )
 
     overall_progress.progress(40, text="🤖 Running AI analysis…")
 
@@ -302,29 +351,37 @@ if run_btn and company:
     # ── Tab 0: Overview ──────────────────────────────────────────────
     with tabs[0]:
         with st.spinner("Generating executive overview…"):
-            st.markdown(ai(
+            overview = ai(
                 BASE_SYSTEM,
-                f"Give a 5-bullet executive summary of {company}'s current market position, "
-                f"key strengths, main threats, and one strategic recommendation:\n\n{llm_context}",
-            ))
+                f"Write a thorough executive summary for {company} covering:\n"
+                f"1. Market position and competitive standing\n"
+                f"2. Key strengths (cite specific data points)\n"
+                f"3. Main threats and weaknesses\n"
+                f"4. Strategic recommendations (at least 2 specific actions)\n"
+                f"5. Overall outlook\n\n"
+                f"Complete all 5 sections fully. Data:\n\n{llm_context}",
+            )
+        st.markdown(overview)
 
-        yf        = data.get("yahoo_finance", {})
         cb        = data.get("crunchbase", {})
         gh        = data.get("github", {})
         jobs_data = data.get("jobs", {})
 
         m1, m2, m3, m4 = st.columns(4)
         with m1:
-            price = yf.get("current_price")
-            chg   = yf.get("price_change_30d_pct", 0)
-            st.metric(
-                "Stock Price",
-                f"${price:.2f}" if price else "Private",
-                delta=f"{chg:.1f}% (30d)" if price else None,
-            )
+            price = yf_data.get("current_price")
+            chg   = yf_data.get("price_change_30d_pct", 0)
+            if yf_data.get("is_private"):
+                st.metric("Stock Price", "Private co.")
+            else:
+                st.metric(
+                    "Stock Price",
+                    f"${price:.2f}" if price else "N/A",
+                    delta=f"{chg:.1f}% (30d)" if price else None,
+                )
         with m2:
             from scrapers.yahoo_finance import format_market_cap
-            mc = yf.get("market_cap")
+            mc = yf_data.get("market_cap")
             tf = cb.get("total_funding_formatted")
             st.metric("Market Cap / Funding",
                       format_market_cap(mc) if mc else (tf or "N/A"))
@@ -339,7 +396,6 @@ if run_btn and company:
 
     # ── Tab 1: Financials ────────────────────────────────────────────
     with tabs[1]:
-        yf_data  = data.get("yahoo_finance", {})
         cb_data  = data.get("crunchbase", {})
         sec_data = data.get("sec", {})
 
@@ -349,20 +405,27 @@ if run_btn and company:
             f"SEC filings: {json.dumps(sec_data, default=str)}"
         )
         with st.spinner("Analysing financial data…"):
-            st.markdown(ai(
+            fin = ai(
                 BASE_SYSTEM,
-                f"Analyse the financial health and trajectory of {company}. "
-                f"Cover: valuation, growth signals, financial risks, investment outlook.\n\n{fin_ctx}",
-            ))
+                f"Write a complete financial analysis for {company} covering:\n"
+                f"1. Valuation and market position\n"
+                f"2. Revenue, growth trajectory, profitability\n"
+                f"3. Financial risks and red flags\n"
+                f"4. Investment outlook and recommendation\n"
+                f"If data is unavailable (private company / rate limited), say so clearly "
+                f"and use any available Wikipedia/Wikidata funding data instead.\n\n{fin_ctx}",
+            )
+        st.markdown(fin)
 
         price_hist = yf_data.get("price_history_30d", [])
         if price_hist:
             df = pd.DataFrame(price_hist).set_index("date")
+            st.markdown("**📈 30-Day Stock Price**")
             st.line_chart(df["close"])
 
         filings = (sec_data.get("recent_10k") or []) + (sec_data.get("recent_10q") or [])
         if filings:
-            st.markdown("**Recent SEC Filings**")
+            st.markdown("**📋 Recent SEC Filings**")
             for f in filings[:6]:
                 st.markdown(
                     f"- **{f['form']}** | {f.get('filing_date', '')} | "
@@ -377,30 +440,37 @@ if run_btn and company:
         reddit_d = data.get("twitter", {})
 
         sent_ctx = (
-            f"News: {json.dumps(news_d, default=str)}\n"
-            f"Reddit: {json.dumps(reddit_d, default=str)}"
+            f"News articles: {json.dumps(news_d, default=str)}\n"
+            f"Reddit discussions: {json.dumps(reddit_d, default=str)}"
         )
-        with st.spinner("Analysing news and social sentiment…"):
-            st.markdown(ai(
+        with st.spinner("Analysing news and sentiment…"):
+            sentiment = ai(
                 BASE_SYSTEM,
-                f"Analyse news coverage and community sentiment for {company}. "
-                f"Identify key narratives, reputation signals, and emerging issues.\n\n{sent_ctx}",
-            ))
+                f"Write a complete news and sentiment analysis for {company} covering:\n"
+                f"1. Overall news sentiment (positive/negative/neutral) with evidence\n"
+                f"2. Key news themes and narratives from the last 30 days\n"
+                f"3. Community/Reddit sentiment and main discussion topics\n"
+                f"4. Reputation signals — any risks or PR issues?\n"
+                f"5. What the sentiment means for competitive positioning\n\n{sent_ctx}",
+            )
+        st.markdown(sentiment)
 
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("**📰 Latest News**")
-            for art in (news_d.get("articles") or [])[:6]:
+            st.markdown("**📰 Latest News Headlines**")
+            for art in (news_d.get("articles") or [])[:8]:
                 title = art.get("title", "")
                 url   = art.get("url", "#")
                 src   = art.get("source", "")
-                st.markdown(f"- [{title}]({url}) *{src}*")
+                pub   = (art.get("published_at") or "")[:16]
+                st.markdown(f"- [{title}]({url})  \n  *{src} · {pub}*")
         with c2:
             st.markdown("**🗣️ Top Reddit Discussions**")
-            for t in (reddit_d.get("top_tweets") or [])[:6]:
-                text  = (t.get("text") or "")[:120]
+            for t in (reddit_d.get("top_tweets") or [])[:8]:
+                text  = (t.get("text") or "")[:130]
                 likes = t.get("likes", 0)
-                st.markdown(f"- {text} 👍{likes}")
+                sub   = t.get("subreddit", "")
+                st.markdown(f"- {text}  \n  👍{likes} · r/{sub}" if sub else f"- {text} 👍{likes}")
 
         overall_progress.progress(72)
 
@@ -410,31 +480,41 @@ if run_btn and company:
         trends_d = data.get("trends", {})
 
         tech_ctx = (
-            f"GitHub: {json.dumps(gh_d, default=str)}\n"
-            f"Trends: {json.dumps(trends_d, default=str)}"
+            f"GitHub data: {json.dumps(gh_d, default=str)}\n"
+            f"Google Trends: {json.dumps(trends_d, default=str)}"
         )
-        with st.spinner("Analysing tech stack and search trends…"):
-            st.markdown(ai(
+        with st.spinner("Analysing tech stack and developer trends…"):
+            tech = ai(
                 BASE_SYSTEM,
-                f"Analyse the technical profile and developer mindshare of {company}. "
-                f"Cover: tech stack, open-source strategy, search trends, developer perception.\n\n{tech_ctx}",
-            ))
+                f"Write a complete technical profile for {company} covering:\n"
+                f"1. Primary tech stack and languages\n"
+                f"2. Open-source strategy and developer community health\n"
+                f"3. Search interest trend (rising/stable/declining) and what drives it\n"
+                f"4. Developer mindshare vs competitors\n"
+                f"5. Technical strengths and weaknesses\n\n{tech_ctx}",
+            )
+        st.markdown(tech)
 
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("**🔧 Top Repositories**")
-            for repo in (gh_d.get("top_repos") or [])[:5]:
+            st.markdown("**🔧 Top GitHub Repositories**")
+            for repo in (gh_d.get("top_repos") or [])[:6]:
                 name  = repo.get("name", "")
                 url   = repo.get("url", "#")
                 stars = repo.get("stars", 0)
                 lang  = repo.get("language", "N/A")
-                st.markdown(f"- [{name}]({url}) ⭐{stars:,} · {lang}")
+                desc  = (repo.get("description") or "")[:60]
+                st.markdown(f"- [{name}]({url}) ⭐{stars:,} · {lang}  \n  *{desc}*")
         with c2:
             iot = trends_d.get("interest_over_time", [])
             if iot:
                 df = pd.DataFrame(iot).set_index("date")
                 st.markdown("**📊 Search Interest (Google Trends)**")
                 st.area_chart(df["interest"])
+            rising = trends_d.get("related_queries_rising", [])
+            if rising:
+                st.markdown("**🔺 Rising Searches**")
+                st.markdown(", ".join(f"`{q}`" for q in rising[:8]))
 
         overall_progress.progress(80)
 
@@ -443,24 +523,34 @@ if run_btn and company:
         ph_d = data.get("product_hunt", {})
 
         with st.spinner("Analysing product launches…"):
-            st.markdown(ai(
+            products = ai(
                 BASE_SYSTEM,
-                f"Analyse {company}'s Product Hunt history. What does it reveal about "
-                f"product strategy and market traction?\n\n{json.dumps(ph_d, default=str)}",
-            ))
+                f"Write a complete product analysis for {company} covering:\n"
+                f"1. Product launch history and market reception\n"
+                f"2. Most successful products and why they resonated\n"
+                f"3. Product strategy and positioning patterns\n"
+                f"4. Gaps or opportunities in their product portfolio\n"
+                f"5. Competitive product positioning\n\n"
+                f"Product Hunt data: {json.dumps(ph_d, default=str)}",
+            )
+        st.markdown(products)
 
-        st.markdown("**🚀 Product Hunt Launches**")
-        for prod in (ph_d.get("products") or [])[:8]:
-            if not prod.get("name"):
-                continue
-            name    = prod.get("name", "")
-            tagline = prod.get("tagline", "")
-            votes   = prod.get("votes", 0)
-            url     = prod.get("url", "")
-            line = f"- **{name}** — {tagline} | 👍 {votes} votes"
-            if url:
-                line += f" | [View]({url})"
-            st.markdown(line)
+        if ph_d.get("products"):
+            st.markdown("**🚀 Product Hunt Launches**")
+            for prod in ph_d["products"][:8]:
+                if not prod.get("name"):
+                    continue
+                name    = prod.get("name", "")
+                tagline = prod.get("tagline", "")
+                votes   = prod.get("votes", 0)
+                url     = prod.get("url", "")
+                date    = (prod.get("launched_at") or "")[:16]
+                line = f"- **{name}** — {tagline} | 👍 {votes}"
+                if date:
+                    line += f" · {date}"
+                if url:
+                    line += f" | [View]({url})"
+                st.markdown(line)
 
         overall_progress.progress(87)
 
@@ -470,11 +560,17 @@ if run_btn and company:
         ha     = jobs_d.get("hiring_analysis", {})
 
         with st.spinner("Analysing hiring trends…"):
-            st.markdown(ai(
+            hiring = ai(
                 BASE_SYSTEM,
-                f"Analyse {company}'s hiring patterns. What do open roles reveal about "
-                f"strategic priorities and growth stage?\n\n{json.dumps(ha, default=str)}",
-            ))
+                f"Write a complete hiring intelligence report for {company} covering:\n"
+                f"1. Current hiring volume and growth phase\n"
+                f"2. What role distribution (Eng/Sales/Marketing/Product) signals about strategy\n"
+                f"3. Remote vs office hiring trends\n"
+                f"4. Key departments they are doubling down on\n"
+                f"5. What their hiring tells us about competitive moves in the next 6-12 months\n\n"
+                f"Hiring data: {json.dumps(ha, default=str)}",
+            )
+        st.markdown(hiring)
 
         if ha:
             c1, c2, c3, c4 = st.columns(4)
@@ -486,23 +582,47 @@ if run_btn and company:
                 st.info(f"**Growth phase:** {ha['inferred_growth_phase']}")
             if ha.get("remote_roles"):
                 st.caption(f"🏠 Remote roles: {ha['remote_roles']}")
+            top_depts = ha.get("top_departments", [])
+            if top_depts:
+                st.markdown(
+                    "**Top departments:** " +
+                    " · ".join(f"{d[0]} ({d[1]})" for d in top_depts[:5])
+                )
 
         overall_progress.progress(93)
 
     # ── Tab 6: SWOT ──────────────────────────────────────────────────
     with tabs[6]:
         with st.spinner("Generating SWOT analysis…"):
-            st.markdown(ai(
+            swot = ai(
                 BASE_SYSTEM,
-                f"Generate a comprehensive SWOT analysis for {company} using ALL the data below. "
-                f"Be specific — cite actual numbers, dates, and facts. "
-                f"Format: ## Strengths / ## Weaknesses / ## Opportunities / ## Threats\n\n{llm_context}",
-            ))
+                f"Write a thorough SWOT analysis for {company} using ALL the data below.\n\n"
+                f"Format EXACTLY as:\n"
+                f"## 💪 Strengths\n[at least 4 specific bullet points with data]\n\n"
+                f"## ⚠️ Weaknesses\n[at least 4 specific bullet points with data]\n\n"
+                f"## 🚀 Opportunities\n[at least 4 specific bullet points with data]\n\n"
+                f"## 🔥 Threats\n[at least 4 specific bullet points with data]\n\n"
+                f"## 🎯 Strategic Priorities\n[3 specific actionable recommendations]\n\n"
+                f"Cite actual numbers, dates, and facts throughout. Complete all sections.\n\n"
+                f"DATA:\n{llm_context}",
+            )
+        st.markdown(swot)
         overall_progress.progress(98)
 
     # ── Tab 7: Raw Data ──────────────────────────────────────────────
     with tabs[7]:
         st.markdown("### 📦 Raw Scraped Data")
+
+        # Show error summary at top
+        errors = {
+            SOURCE_LABELS.get(k, k): v.get("error")
+            for k, v in data.items() if v.get("error")
+        }
+        if errors:
+            with st.expander("⚠️ Source warnings (click to expand)", expanded=False):
+                for src, err in errors.items():
+                    st.markdown(f"- **{src}**: {err}")
+
         for key, val in data.items():
             label = SOURCE_LABELS.get(key, key)
             with st.expander(f"{label} — raw JSON"):
