@@ -142,26 +142,38 @@ US_TICKERS = {
 # ════════════════════════════════════════════════════════════════════
 
 def _nse_session() -> requests.Session:
-    """Create a session with NSE cookies (required to avoid 401)."""
+    """
+    Create a session with NSE cookies.
+    NSE requires: visit homepage first to get cookies, then call API.
+    Uses two separate attempts to handle cookie refresh.
+    """
     s = requests.Session()
-    try:
-        s.get("https://www.nseindia.com", headers=NSE_HEADERS, timeout=8)
-    except Exception:
-        pass
+    s.headers.update(NSE_HEADERS)
+    for url in [
+        "https://www.nseindia.com",
+        "https://www.nseindia.com/market-data/live-equity-market",
+    ]:
+        try:
+            s.get(url, timeout=8)
+            time.sleep(0.5)
+        except Exception:
+            pass
     return s
 
 
 def _get_nse_quote(symbol: str) -> dict:
-    """Fetch live quote from NSE India public API."""
+    """Fetch live quote from NSE India public API with cookie session."""
+    symbol = symbol.upper().strip()
     try:
         s = _nse_session()
         resp = s.get(
             f"https://www.nseindia.com/api/quote-equity?symbol={symbol}",
-            headers=NSE_HEADERS,
-            timeout=12,
+            headers={**NSE_HEADERS, "X-Requested-With": "XMLHttpRequest"},
+            timeout=15,
         )
-        if resp.status_code == 200:
+        if resp.status_code == 200 and resp.text.strip().startswith("{"):
             return resp.json()
+        logger.warning(f"NSE quote {symbol}: status={resp.status_code}, body={resp.text[:80]}")
     except Exception as e:
         logger.warning(f"NSE quote error for {symbol}: {e}")
     return {}
@@ -169,14 +181,15 @@ def _get_nse_quote(symbol: str) -> dict:
 
 def _get_nse_company_info(symbol: str) -> dict:
     """Fetch company info from NSE India API."""
+    symbol = symbol.upper().strip()
     try:
         s = _nse_session()
         resp = s.get(
             f"https://www.nseindia.com/api/company-info?symbol={symbol}",
-            headers=NSE_HEADERS,
-            timeout=12,
+            headers={**NSE_HEADERS, "X-Requested-With": "XMLHttpRequest"},
+            timeout=15,
         )
-        if resp.status_code == 200:
+        if resp.status_code == 200 and resp.text.strip().startswith("{"):
             return resp.json()
     except Exception as e:
         logger.warning(f"NSE company info error for {symbol}: {e}")
