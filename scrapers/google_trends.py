@@ -44,6 +44,19 @@ def get_trends_data(company_name: str, timeframe: str = "today 3-m") -> dict:
     }
 
     last_error = None
+
+    # Fix: pytrends uses urllib3 Retry(method_whitelist=...) which was renamed
+    # to allowed_methods in urllib3 >= 2.0. Patch it before importing pytrends.
+    try:
+        from urllib3.util.retry import Retry as _Retry
+        _orig_init = _Retry.__init__
+        def _patched_init(self, *args, **kwargs):
+            kwargs.pop("method_whitelist", None)
+            _orig_init(self, *args, **kwargs)
+        _Retry.__init__ = _patched_init
+    except Exception:
+        pass
+
     for attempt in range(MAX_RETRIES):
         try:
             from pytrends.request import TrendReq
@@ -52,8 +65,6 @@ def get_trends_data(company_name: str, timeframe: str = "today 3-m") -> dict:
                 hl="en-US",
                 tz=330,           # IST offset for Indian companies (330 = UTC+5:30)
                 timeout=(10, 30),
-                retries=1,
-                backoff_factor=0.5,
             )
             pytrends.build_payload(
                 [company_name],
