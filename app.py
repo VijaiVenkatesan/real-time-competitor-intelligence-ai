@@ -231,11 +231,12 @@ if not GROQ_API_KEY:
     )
     st.stop()
 
-if not FINNHUB_KEY:
+if FINNHUB_KEY:
+    st.caption("✅ Finnhub API connected — global stock data enabled (US, India NSE/BSE, UK, EU, Asia)")
+else:
     st.info(
-        "💡 **Optional:** Add `FINNHUB_API_KEY` to your Streamlit secrets for reliable stock data. "
-        "Free key at [finnhub.io/register](https://finnhub.io/register) — no credit card needed. "
-        "Without it, stock data may be unavailable due to Yahoo Finance rate limits on shared IPs."
+        "💡 **Optional:** Add `FINNHUB_API_KEY` to Streamlit secrets for reliable global stock data. "
+        "Free key at [finnhub.io/register](https://finnhub.io/register) — no credit card needed."
     )
 
 source_map = {
@@ -597,10 +598,18 @@ with main_tab:
 
         yf_data = data.get("yahoo_finance", {})
         if yf_data.get("error") and not yf_data.get("is_private"):
-            if "finnhub" in (yf_data.get("error") or "").lower() or "yfinance" in (yf_data.get("error") or "").lower():
+            if FINNHUB_KEY:
+                st.info(
+                    f"ℹ️ **Financial data limited for '{company}'.** "
+                    "Finnhub free tier has limited coverage for Indian (NSE/BSE) and some non-US stocks. "
+                    "The analysis uses Wikipedia/Wikidata funding data instead. "
+                    f"*Details: {yf_data.get('error', '')[:120]}*"
+                )
+            else:
                 st.warning(
-                    "💡 **Stock data unavailable.** Add `FINNHUB_API_KEY` to your Streamlit secrets "
-                    "for reliable financial data. Free key at [finnhub.io/register](https://finnhub.io/register)"
+                    "💡 **Stock data unavailable** — no `FINNHUB_API_KEY` in secrets. "
+                    "Add a free key from [finnhub.io/register](https://finnhub.io/register) "
+                    "for reliable global stock data."
                 )
 
         tabs = st.tabs([
