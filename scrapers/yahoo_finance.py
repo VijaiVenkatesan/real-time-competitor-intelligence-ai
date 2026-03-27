@@ -117,6 +117,137 @@ NSE_SYMBOLS = {
     "devyani": "DEVYANI",
     "sapphire foods": "SAPPHIRE",
     "jubilant foodworks": "JUBLFOOD",
+    # Telecom & Media
+    "jio": "JIOFIN",
+    "reliance jio": "JIOFIN",
+    "jio financial": "JIOFIN",
+    "jio finance": "JIOFIN",
+    "bharti airtel": "BHARTIARTL",
+    "airtel": "BHARTIARTL",
+    "vodafone idea": "IDEA",
+    "vi": "IDEA",
+    "bsnl": None,  # unlisted
+    "sun tv": "SUNTV",
+    "zee entertainment": "ZEEL",
+    "zee": "ZEEL",
+    "dish tv": "DISHTV",
+    "tata play": None,  # unlisted
+    # IT / Software (additional)
+    "oracle financial": "OFSS",
+    "ofss": "OFSS",
+    "sonata software": "SONATSOFTW",
+    "sonata": "SONATSOFTW",
+    "tata elxsi": "TATAELXSI",
+    "niit technologies": "COFORGE",
+    "eclerx": "ECLERX",
+    "mphasis": "MPHASIS",
+    "sasken": "SASKEN",
+    "tanla": "TANLA",
+    "route mobile": "ROUTE",
+    # E-commerce / Fintech
+    "info edge": "NAUKRI",
+    "naukri": "NAUKRI",
+    "indiamart": "INDIAMART",
+    "just dial": "JUSTDIAL",
+    "justdial": "JUSTDIAL",
+    "matrimony": "MATRIMONY",
+    "cartrade": "CARTRADE",
+    "easy my trip": "EASEMYTRIP",
+    "easemytrip": "EASEMYTRIP",
+    "indiabulls": "IBULHSGFIN",
+    "angel broking": "ANGELONE",
+    "angel one": "ANGELONE",
+    "5paisa": "5PAISA",
+    "hdfc life": "HDFCLIFE",
+    "sbi life": "SBILIFE",
+    "icici prudential": "ICICIPRULI",
+    "max financial": "MFSL",
+    "star health": "STARHEALTH",
+    # Auto
+    "hero motocorp": "HEROMOTOCO",
+    "hero": "HEROMOTOCO",
+    "bajaj auto": "BAJAJ-AUTO",
+    "tvs motor": "TVSMOTOR",
+    "tvs": "TVSMOTOR",
+    "eicher motors": "EICHERMOT",
+    "royal enfield": "EICHERMOT",
+    "motherson": "MOTHERSON",
+    "bosch india": "BOSCHLTD",
+    "bosch": "BOSCHLTD",
+    "minda": "MINDAIND",
+    # Real Estate
+    "dlf": "DLF",
+    "godrej properties": "GODREJPROP",
+    "oberoi realty": "OBEROIRLTY",
+    "brigade": "BRIGADE",
+    "prestige": "PRESTIGE",
+    "sobha": "SOBHA",
+    # Healthcare
+    "apollo hospitals": "APOLLOHOSP",
+    "apollo": "APOLLOHOSP",
+    "fortis": "FORTIS",
+    "max healthcare": "MAXHEALTH",
+    "narayana health": "NH",
+    "divi labs": "DIVISLAB",
+    "biocon": "BIOCON",
+    "gland pharma": "GLAND",
+    "alkem": "ALKEM",
+    "lupin": "LUPIN",
+    "torrent pharma": "TORNTPHARM",
+    "torrent": "TORNTPHARM",
+    "ipca": "IPCALAB",
+    # FMCG
+    "colgate": "COLPAL",
+    "colgate palmolive": "COLPAL",
+    "pepsico india": "VARUNBEV",
+    "varun beverages": "VARUNBEV",
+    "radico khaitan": "RADICO",
+    "united spirits": "MCDOWELL-N",
+    "united breweries": "UBL",
+    "venky's": "VENKEYS",
+    # Infrastructure / Cement
+    "larsen": "LT",
+    "l&t": "LT",
+    "larsen and toubro": "LT",
+    "ambuja cement": "AMBUJACEM",
+    "acc": "ACC",
+    "shree cement": "SHREECEM",
+    "ramco cement": "RAMCOCEM",
+    "nuvoco": "NUVOCO",
+    # PSU / Govt
+    "hal": "HAL",
+    "hindustan aeronautics": "HAL",
+    "bel": "BEL",
+    "bharat electronics": "BEL",
+    "mfsl": "MFSL",
+    "rites": "RITES",
+    "irfc": "IRFC",
+    "rvnl": "RVNL",
+    "rail vikas": "RVNL",
+    "nmdc": "NMDC",
+    "sail": "SAIL",
+    "steel authority": "SAIL",
+    "gail": "GAIL",
+    "petronet": "PETRONET",
+    "concor": "CONCOR",
+    "container corporation": "CONCOR",
+    # Specialty / Others
+    "pi industries": "PIIND",
+    "pi ind": "PIIND",
+    "upl": "UPL",
+    "coromandel": "COROMANDEL",
+    "deepak nitrite": "DEEPAKNTR",
+    "navin fluorine": "NAVINFLUOR",
+    "aarti industries": "AARTIIND",
+    "atul ltd": "ATUL",
+    "kpi green": "KPIGREEN",
+    "adani total": "ATGL",
+    "torrent power": "TORNTPOWER",
+    "tata power": "TATAPOWER",
+    "cesc": "CESC",
+    "nhpc": "NHPC",
+    "sjvn": "SJVN",
+    "kalpataru": "KPIL",
 }
 
 # ── US / Global ticker overrides ─────────────────────────────────────
@@ -261,7 +392,11 @@ def _fetch_via_nse(symbol: str) -> dict:
 # ════════════════════════════════════════════════════════════════════
 
 def _finnhub_key() -> str:
-    return os.getenv("FINNHUB_API_KEY", "")
+    """Read from os.environ — must be set by app.py before threads start."""
+    key = os.getenv("FINNHUB_API_KEY", "").strip()
+    if not key:
+        logger.debug("FINNHUB_API_KEY not found in os.environ")
+    return key
 
 
 def _finnhub_get(endpoint: str, params: dict) -> dict | None:
@@ -272,12 +407,18 @@ def _finnhub_get(endpoint: str, params: dict) -> dict | None:
         resp = requests.get(
             f"{FINNHUB_BASE}/{endpoint}",
             params={**params, "token": key},
+            headers={"User-Agent": "CompetitorIntelligenceBot/1.0"},
             timeout=12,
         )
         if resp.status_code == 200:
             data = resp.json()
             return data if data else None
-        logger.warning(f"Finnhub {endpoint} → {resp.status_code}")
+        elif resp.status_code == 401:
+            logger.warning(f"Finnhub {endpoint} → 401 Unauthorized (invalid API key?)")
+        elif resp.status_code == 403:
+            logger.warning(f"Finnhub {endpoint} → 403 (free tier may not cover this endpoint/symbol)")
+        else:
+            logger.warning(f"Finnhub {endpoint} → {resp.status_code}")
     except Exception as e:
         logger.warning(f"Finnhub {endpoint} error: {e}")
     return None
