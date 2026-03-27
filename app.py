@@ -28,10 +28,15 @@ pd.set_option("future.no_silent_downcasting", True)
 # ─────────────────────────────────────────────────────────────────────
 
 def _get_secret(key: str) -> str:
+    """Read secret from st.secrets (dict access) then os.environ fallback."""
     try:
-        return st.secrets.get(key, os.getenv(key, ""))
-    except Exception:
-        return os.getenv(key, "")
+        # st.secrets uses dict-style access, NOT .get()
+        val = st.secrets[key]
+        if val:
+            return str(val).strip()
+    except (KeyError, FileNotFoundError, Exception):
+        pass
+    return os.getenv(key, "").strip()
 
 
 GROQ_API_KEY  = _get_secret("GROQ_API_KEY")
