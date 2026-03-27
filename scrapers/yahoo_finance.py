@@ -70,7 +70,6 @@ NSE_SYMBOLS = {
     "policybazaar": "POLICYBZR",
     "ola electric": "OLAELEC",
     "datamatics": "DATAMATICS",
-    "infosystems": "DATAMATICS",  # Datamatics Global Services
     "wipro": "WIPRO",
     "ltts": "LTTS", "l&t technology": "LTTS", "lt technology": "LTTS",
     "l&t infotech": "LTI",
@@ -304,9 +303,10 @@ def _get_nse_quote(symbol: str) -> dict:
         )
         if resp.status_code == 200 and resp.text.strip().startswith("{"):
             return resp.json()
-        logger.warning(f"NSE quote {symbol}: status={resp.status_code}, body={resp.text[:80]}")
+        # NSE blocks server-side requests with 403/Access Denied — silently fall through to yfinance
+        logger.debug(f"NSE quote {symbol}: status={resp.status_code} (blocked, using yfinance fallback)")
     except Exception as e:
-        logger.warning(f"NSE quote error for {symbol}: {e}")
+        logger.debug(f"NSE quote {symbol}: {e} (using yfinance fallback)")
     return {}
 
 
@@ -323,7 +323,7 @@ def _get_nse_company_info(symbol: str) -> dict:
         if resp.status_code == 200 and resp.text.strip().startswith("{"):
             return resp.json()
     except Exception as e:
-        logger.warning(f"NSE company info error for {symbol}: {e}")
+        logger.debug(f"NSE company info {symbol}: {e}")
     return {}
 
 
